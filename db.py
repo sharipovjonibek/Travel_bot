@@ -1,4 +1,4 @@
-# db.py  (only the changed/added parts)
+# db.py
 
 import os, logging
 from typing import Optional, Tuple, Dict, Any
@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 load_dotenv()
 
-# --- psycopg2 import (as you have) ---
+# --- psycopg2 import ---
 try:
     import psycopg2  # type: ignore
     from psycopg2.extras import RealDictCursor  # type: ignore
@@ -49,7 +49,7 @@ _mem_next_id: int = 1
 def _enable_memory_mode(reason: str):
     global _IN_MEMORY_MODE
     if not _IN_MEMORY_MODE:
-        logger.error("⚠️ Switching to in-memory DB: %s", reason)
+        logger.error(" Switching to in-memory DB: %s", reason)
     _IN_MEMORY_MODE = True
 
 def init_db():
@@ -75,7 +75,7 @@ def init_db():
         )
         con.commit()
         con.close()
-        logger.info("✅ PostgreSQL ready")
+        logger.info(" PostgreSQL ready")
     except Exception as e:
         _enable_memory_mode(f"PostgreSQL init failed: {e}")
 
@@ -86,7 +86,6 @@ def upsert_user(tg_id: int,
                 phone: Optional[str] = None):
     global _mem_next_id
     if _IN_MEMORY_MODE:
-        # (same as your logic) ...
         row = _mem_users_by_tg.get(tg_id)
         if not row:
             row = {"id": _mem_next_id, "tg_id": tg_id,
@@ -134,3 +133,4 @@ def get_user(tg_id: int) -> Optional[Tuple[int, int, Optional[str], Optional[str
         return (row["id"], row["tg_id"], row["language"], row["first_name"], row["last_name"], row["phone"])
     except Exception as e:
         _enable_memory_mode(f"PostgreSQL read failed: {e}")
+        return None
