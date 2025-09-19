@@ -1,3 +1,4 @@
+# bot/keyboards.py
 from telegram import (
     KeyboardButton,
     ReplyKeyboardMarkup,
@@ -5,6 +6,7 @@ from telegram import (
     InlineKeyboardMarkup,
 )
 from typing import List, Tuple
+
 
 def lang_reply_keyboard():
     """Language selection via ReplyKeyboardMarkup (NOT inline)."""
@@ -15,10 +17,12 @@ def lang_reply_keyboard():
     ]
     return ReplyKeyboardMarkup(kb, resize_keyboard=True, one_time_keyboard=True)
 
+
 def contact_keyboard(text_label: str):
     """Share phone via contact request button."""
     kb = [[KeyboardButton(text_label, request_contact=True)]]
     return ReplyKeyboardMarkup(kb, resize_keyboard=True, one_time_keyboard=True)
+
 
 def location_request_keyboard(send_location_text: str, type_place_text: str, settings_text: str | None = None):
     """
@@ -27,11 +31,13 @@ def location_request_keyboard(send_location_text: str, type_place_text: str, set
     """
     kb = [
         [KeyboardButton(send_location_text, request_location=True)],
-        # [KeyboardButton(type_place_text)],  # keep disabled if you don't want it
+        # If you also want a text-input mode button on the reply keyboard, uncomment:
+        # [KeyboardButton(type_place_text)],
     ]
     if settings_text:
         kb.append([KeyboardButton(settings_text)])
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
+
 
 def categories_keyboard(items: List[Tuple[str, str]], back_text: str):
     """
@@ -45,11 +51,13 @@ def categories_keyboard(items: List[Tuple[str, str]], back_text: str):
     rows.append([InlineKeyboardButton(back_text, callback_data="back_root")])
     return InlineKeyboardMarkup(rows)
 
+
 def categories_reply_keyboard(labels: List[str], back_text: str):
     """ReplyKeyboard with category labels (one per row) and a Back button."""
     kb: List[List[KeyboardButton]] = [[KeyboardButton(lbl)] for lbl in labels]
     kb.append([KeyboardButton(back_text)])
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
+
 
 def place_card_buttons(lat: float, lng: float, back_text: str):
     """Inline buttons for external navigation + back to categories."""
@@ -63,9 +71,11 @@ def place_card_buttons(lat: float, lng: float, back_text: str):
         ]
     )
 
-# NEW: simple settings menu (reply keyboard)
-def settings_keyboard(edit_name_label: str, edit_phone_label: str, back_text: str):
+
+# NEW: simple settings menu (reply keyboard) with language at the top
+def settings_keyboard(edit_language_label: str, edit_name_label: str, edit_phone_label: str, back_text: str):
     kb = [
+        [KeyboardButton(edit_language_label)],
         [KeyboardButton(edit_name_label)],
         [KeyboardButton(edit_phone_label)],
         [KeyboardButton(back_text)],
