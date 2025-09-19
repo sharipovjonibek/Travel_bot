@@ -134,8 +134,3 @@ def get_user(tg_id: int) -> Optional[Tuple[int, int, Optional[str], Optional[str
         return (row["id"], row["tg_id"], row["language"], row["first_name"], row["last_name"], row["phone"])
     except Exception as e:
         _enable_memory_mode(f"PostgreSQL read failed: {e}")
-<<<<<<< HEAD
-        return None
-=======
-        return None
->>>>>>> Update: <your message>
