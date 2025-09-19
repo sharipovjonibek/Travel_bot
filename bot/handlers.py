@@ -463,7 +463,6 @@ def build_app() -> Application:
         },
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True,
-        per_message=True,
     )
     app.add_handler(conv)
     app.add_error_handler(error_handler)
