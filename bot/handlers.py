@@ -1,3 +1,4 @@
+# bot/handlers.py
 from __future__ import annotations
 import asyncio
 import logging
@@ -25,12 +26,12 @@ from bot.keyboards import (
     categories_keyboard,
     place_card_buttons,
     categories_reply_keyboard,
-    settings_keyboard,          # NEW: import
+    settings_keyboard,
 )
 from bot.locale import L
 from services.google_places import search_nearby, search_text, get_photo_url
 from services.google_places import reverse_geocode
-from services.utils import haversine_km  # NEW: for distance
+from services.utils import haversine_km
 from config import TELEGRAM_BOT_TOKEN
 
 logging.basicConfig(level=logging.INFO)
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 # ── Conversation states (expanded) ─────────────────────────────────────────────
 (LANG, FIRST_NAME, LAST_NAME, CONTACT,
  WAIT_LOCATION_OR_TEXT, CHOOSE_CATEGORY,
- SETTINGS, EDIT_NAME, EDIT_PHONE) = range(9)
+ SETTINGS, EDIT_NAME, EDIT_PHONE, EDIT_LANG) = range(10)
 
 # Updated canonical categories: 4 items
 ENG_CATEGORIES: List[str] = [
@@ -49,11 +50,13 @@ ENG_CATEGORIES: List[str] = [
     "Historic Places",
 ]
 
+
 def get_lang(tg_id: int, default: str = "en") -> str:
     row = get_user(tg_id)
     if row and row[2]:
         return row[2]
     return default
+
 
 def _category_items_for_lang(lang: str):
     localized = L["categories"][lang]
@@ -63,6 +66,20 @@ def _category_items_for_lang(lang: str):
         pairs.append((label, key))
     return pairs
 
+
+def _map_lang_choice(txt: str) -> str:
+    t = (txt or "").lower()
+    mapping = {
+        "oʻzbekcha": "uz", "ozbekcha": "uz", "uzbek": "uz", "🇺🇿 oʻzbekcha": "uz",
+        "русский": "ru", "russian": "ru", "🇷🇺 русский": "ru",
+        "english": "en", "🇬🇧 english": "en",
+    }
+    for k, v in mapping.items():
+        if k in t:
+            return v
+    return "en"
+
+
 # NEW: distance formatter
 def _fmt_distance_km(dkm: float) -> str:
     if dkm < 1.0:
@@ -70,6 +87,7 @@ def _fmt_distance_km(dkm: float) -> str:
     if dkm < 10:
         return f"{dkm:.1f} km"
     return f"{int(round(dkm))} km"
+
 
 # NEW: take today's hours line from weekdayDescriptions if present
 def _today_hours_line(weekday_descriptions: List[str]) -> Optional[str]:
@@ -87,6 +105,7 @@ def _today_hours_line(weekday_descriptions: List[str]) -> Optional[str]:
                 return line
     return weekday_descriptions[0]
 
+
 # ── Registration & main flow ──────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     init_db()
@@ -103,7 +122,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=location_request_keyboard(
                     L["send_location_button"][lang],
                     L["type_place_button"][lang],
-                    settings_text=L["settings_button"][lang],   # NEW
+                    settings_text=L["settings_button"][lang],
                 ),
             )
             return WAIT_LOCATION_OR_TEXT
@@ -111,6 +130,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upsert_user(user.id)
     await update.message.reply_text(L["lang_prompt"]["en"], reply_markup=lang_reply_keyboard())
     return LANG
+
 
 async def on_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = (update.message.text or "").lower()
@@ -124,31 +144,35 @@ async def on_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(L["ask_name"][lang], reply_markup=ReplyKeyboardRemove())
     return FIRST_NAME
 
+
 async def on_first_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
-    upsert_user(update.effective_user.id, first_name=update.message.text.strip())
+    upsert_user(update.effective_user.id, first_name=(update.message.text or "").strip())
     await update.message.reply_text(L["ask_surname"][lang])
     return LAST_NAME
 
+
 async def on_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
-    upsert_user(update.effective_user.id, last_name=update.message.text.strip())
+    upsert_user(update.effective_user.id, last_name=(update.message.text or "").strip())
     await update.message.reply_text(L["ask_contact"][lang], reply_markup=contact_keyboard(L["share_phone_button"][lang]))
     return CONTACT
 
+
 async def on_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
-    phone = update.message.contact.phone_number if update.message.contact else update.message.text.strip()
+    phone = update.message.contact.phone_number if update.message.contact else (update.message.text or "").strip()
     upsert_user(update.effective_user.id, phone=phone)
     await update.message.reply_text(
         L["ask_location_or_text"][lang],
         reply_markup=location_request_keyboard(
             L["send_location_button"][lang],
             L["type_place_button"][lang],
-            settings_text=L["settings_button"][lang],   # NEW
+            settings_text=L["settings_button"][lang],
         ),
     )
     return WAIT_LOCATION_OR_TEXT
+
 
 async def on_location_or_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
@@ -194,18 +218,24 @@ async def on_location_or_text(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     return CHOOSE_CATEGORY
 
+
 async def on_choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
-    text = (update.callback_query.data if update.callback_query else update.message.text).strip() if update else ""
+    text = ""
+    if update.callback_query:
+        text = (update.callback_query.data or "").strip()
+    elif update.message:
+        text = (update.message.text or "").strip()
 
-    # Handle Back via reply keyboard
+    # Handle Back via reply keyboard or inline
     if text == L["back"][lang] or (update.callback_query and text == "back_root"):
-        await (update.callback_query.message if update.callback_query else update.message).reply_text(
+        target = update.callback_query.message if update.callback_query else update.message
+        await target.reply_text(
             L["ask_location_or_text"][lang],
             reply_markup=location_request_keyboard(
                 L["send_location_button"][lang],
                 L["type_place_button"][lang],
-                settings_text=L["settings_button"][lang],   # NEW
+                settings_text=L["settings_button"][lang],
             ),
         )
         return WAIT_LOCATION_OR_TEXT
@@ -223,24 +253,26 @@ async def on_choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return CHOOSE_CATEGORY
 
     lat, lng = context.user_data.get("query_point", (None, None))
+    target = update.callback_query.message if update.callback_query else update.message
+
     if lat is None:
-        await (update.callback_query.message if update.callback_query else update.message).reply_text(
+        await target.reply_text(
             L["ask_location_or_text"][lang],
             reply_markup=location_request_keyboard(
                 L["send_location_button"][lang],
                 L["type_place_button"][lang],
-                settings_text=L["settings_button"][lang],   # NEW
+                settings_text=L["settings_button"][lang],
             ),
         )
         return WAIT_LOCATION_OR_TEXT
 
-    await (update.callback_query.message if update.callback_query else update.message).reply_text(L["searching"][lang])
+    await target.reply_text(L["searching"][lang])
 
     places = await asyncio.to_thread(search_nearby, lat, lng, category_key)
 
     if not places:
         labels = L["categories"][lang]
-        await (update.callback_query.message if update.callback_query else update.message).reply_text(
+        await target.reply_text(
             L["no_results"][lang], reply_markup=categories_reply_keyboard(labels, L["back"][lang])
         )
         return CHOOSE_CATEGORY
@@ -307,24 +339,25 @@ async def on_choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE)
         caption = "\n".join(lines)
 
         if photo_url:
-            await (update.callback_query.message if update.callback_query else update.message).reply_photo(
+            await target.reply_photo(
                 photo=photo_url,
                 caption=caption,
                 parse_mode=ParseMode.HTML,
                 reply_markup=place_card_buttons(plat, plng, L["back"][lang]),
             )
         else:
-            await (update.callback_query.message if update.callback_query else update.message).reply_text(
+            await target.reply_text(
                 text=caption,
                 parse_mode=ParseMode.HTML,
                 reply_markup=place_card_buttons(plat, plng, L["back"][lang]),
             )
 
     labels = L["categories"][lang]
-    await (update.callback_query.message if update.callback_query else update.message).reply_text(
+    await target.reply_text(
         L["choose_category"][lang], reply_markup=categories_reply_keyboard(labels, L["back"][lang])
     )
     return CHOOSE_CATEGORY
+
 
 # ── Settings flow ─────────────────────────────────────────────────────────────
 async def settings_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -334,6 +367,7 @@ async def settings_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             L["settings_title"][lang],
             reply_markup=settings_keyboard(
+                L["edit_language"][lang],
                 L["edit_name"][lang],
                 L["edit_phone"][lang],
                 L["back"][lang],
@@ -343,12 +377,14 @@ async def settings_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.reply_text(
             L["settings_title"][lang],
             reply_markup=settings_keyboard(
+                L["edit_language"][lang],
                 L["edit_name"][lang],
                 L["edit_phone"][lang],
                 L["back"][lang],
             ),
         )
     return SETTINGS
+
 
 async def on_settings_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
@@ -365,6 +401,11 @@ async def on_settings_choice(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return WAIT_LOCATION_OR_TEXT
 
+    if choice == L["edit_language"][lang]:
+        # Reuse the language selection keyboard
+        await update.message.reply_text(L["lang_prompt"][lang], reply_markup=lang_reply_keyboard())
+        return EDIT_LANG
+
     if choice == L["edit_name"][lang]:
         await update.message.reply_text(L["enter_new_name"][lang], reply_markup=ReplyKeyboardRemove())
         return EDIT_NAME
@@ -374,9 +415,35 @@ async def on_settings_choice(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return EDIT_PHONE
 
     # Unknown tap → stay in SETTINGS
-    await update.message.reply_text(L["settings_title"][lang],
-        reply_markup=settings_keyboard(L["edit_name"][lang], L["edit_phone"][lang], L["back"][lang]))
+    await update.message.reply_text(
+        L["settings_title"][lang],
+        reply_markup=settings_keyboard(
+            L["edit_language"][lang],
+            L["edit_name"][lang],
+            L["edit_phone"][lang],
+            L["back"][lang],
+        ),
+    )
     return SETTINGS
+
+
+async def on_edit_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # User tapped a language in the reply keyboard
+    new_lang = _map_lang_choice(update.message.text)
+    upsert_user(update.effective_user.id, language=new_lang)
+
+    # Confirm in the NEW language, and show Settings menu again (now localized)
+    await update.message.reply_text(
+        L["saved"][new_lang],
+        reply_markup=settings_keyboard(
+            L["edit_language"][new_lang],
+            L["edit_name"][new_lang],
+            L["edit_phone"][new_lang],
+            L["back"][new_lang],
+        ),
+    )
+    return SETTINGS
+
 
 async def on_edit_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
@@ -390,9 +457,15 @@ async def on_edit_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upsert_user(update.effective_user.id, first_name=first, last_name=last)
     await update.message.reply_text(
         L["saved"][lang],
-        reply_markup=settings_keyboard(L["edit_name"][lang], L["edit_phone"][lang], L["back"][lang]),
+        reply_markup=settings_keyboard(
+            L["edit_language"][lang],
+            L["edit_name"][lang],
+            L["edit_phone"][lang],
+            L["back"][lang],
+        ),
     )
     return SETTINGS
+
 
 async def on_edit_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
@@ -400,9 +473,15 @@ async def on_edit_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upsert_user(update.effective_user.id, phone=phone)
     await update.message.reply_text(
         L["saved"][lang],
-        reply_markup=settings_keyboard(L["edit_name"][lang], L["edit_phone"][lang], L["back"][lang]),
+        reply_markup=settings_keyboard(
+            L["edit_language"][lang],
+            L["edit_name"][lang],
+            L["edit_phone"][lang],
+            L["back"][lang],
+        ),
     )
     return SETTINGS
+
 
 # ── Errors & misc ────────────────────────────────────────────────────────────
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -412,6 +491,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text("⚠️ An error occurred. Please try again.")
     except Exception:
         pass
+
 
 def build_app() -> Application:
     # Increase network timeouts to reduce TimedOut errors on slow networks
@@ -431,7 +511,7 @@ def build_app() -> Application:
         entry_points=[
             CommandHandler("start", start),
             CommandHandler("restart", start),
-            CommandHandler("settings", settings_entry),  # NEW: allow /settings
+            CommandHandler("settings", settings_entry),
         ],
         states={
             LANG: [MessageHandler(filters.TEXT & ~filters.COMMAND, on_language)],
@@ -450,7 +530,6 @@ def build_app() -> Application:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, on_choose_category),
                 CallbackQueryHandler(on_choose_category, pattern=r"^(cat\|.+|back_root)$"),
             ],
-            # NEW settings states:
             SETTINGS: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, on_settings_choice),
             ],
@@ -460,6 +539,9 @@ def build_app() -> Application:
             EDIT_PHONE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, on_edit_phone),
             ],
+            EDIT_LANG: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_edit_language),
+            ],
         },
         fallbacks=[CommandHandler("start", start)],
         allow_reentry=True,
@@ -468,17 +550,20 @@ def build_app() -> Application:
     app.add_error_handler(error_handler)
     return app
 
+
 async def on_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(update.effective_user.id)
     await update.message.reply_text(
         L["ask_location_or_text"][lang] + f"\n\n/{'settings'} — {L['settings_shortcut_hint'][lang]}"
     )
 
+
 def main():
     app = build_app()
     app.add_handler(MessageHandler(filters.COMMAND, on_unknown))
     # Drop pending updates to avoid long backlog and reduce timeouts
     app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()

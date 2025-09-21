@@ -1,3 +1,4 @@
+# bot/locale.py
 # Simple i18n dict with visual icons (UZ/RU/EN)
 L = {
     'lang_prompt': {
@@ -106,6 +107,11 @@ L = {
         'uz': "🛠️ Nimani tahrirlamoqchisiz?",
         'ru': "🛠️ Что хотите изменить?",
         'en': "🛠️ What would you like to edit?",
+    },
+    'edit_language': {
+        'uz': "🌐 Tilni o‘zgartirish",
+        'ru': "🌐 Сменить язык",
+        'en': "🌐 Change language",
     },
     'edit_name': {
         'uz': "✏️ Ism/Familiya",

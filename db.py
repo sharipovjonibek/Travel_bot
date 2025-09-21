@@ -1,22 +1,40 @@
 # db.py
 
-import os, logging
-from typing import Optional, Tuple, Dict, Any
+import logging
+import os
+from typing import Any, Dict, Optional, Tuple
+
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 load_dotenv()
 
-# --- psycopg2 import ---
+# --- database driver import ---
+_DB_DRIVER: Optional[str] = None
+_DB_DRIVER_ERR: Optional[str] = None
+
 try:
-    import psycopg2  # type: ignore
-    from psycopg2.extras import RealDictCursor  # type: ignore
-    _PSYCOPG2_AVAILABLE = True
-except Exception as e:
-    logger.warning("psycopg2 not available: %s", e)
+    import psycopg  # type: ignore
+    from psycopg.rows import dict_row  # type: ignore
+
+    _DB_DRIVER = "psycopg"
+except Exception as psycopg_exc:
+    psycopg = None  # type: ignore
+    try:
+        import psycopg2  # type: ignore
+        from psycopg2.extras import RealDictCursor  # type: ignore
+
+        _DB_DRIVER = "psycopg2"
+    except Exception as psycopg2_exc:
+        psycopg2 = None  # type: ignore
+        RealDictCursor = None  # type: ignore
+        _DB_DRIVER_ERR = (
+            f"psycopg import failed: {psycopg_exc}; psycopg2 import failed: {psycopg2_exc}"
+        )
+        logger.warning("%s", _DB_DRIVER_ERR)
+else:
     psycopg2 = None  # type: ignore
     RealDictCursor = None  # type: ignore
-    _PSYCOPG2_AVAILABLE = False
 
 def _build_db_url() -> Optional[str]:
     """Prefer DATABASE_URL; otherwise compose from PG* parts. Append sslmode=require for non-local hosts."""
@@ -41,6 +59,18 @@ def _build_db_url() -> Optional[str]:
 
 DB_URL = _build_db_url()
 
+
+def _connect():  # type: ignore[return-value]
+    """Return a psycopg(2/3) connection configured to yield dict-like rows."""
+
+    if not DB_URL:
+        raise RuntimeError("DB_URL is not configured")
+    if _DB_DRIVER == "psycopg":
+        return psycopg.connect(DB_URL, row_factory=dict_row)  # type: ignore[call-arg, return-value]
+    if _DB_DRIVER == "psycopg2":
+        return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)  # type: ignore[call-arg, return-value]
+    raise RuntimeError("No PostgreSQL driver available")
+
 # In-memory fallback store
 _IN_MEMORY_MODE: bool = False
 _mem_users_by_tg: Dict[int, Dict[str, Any]] = {}
@@ -54,14 +84,17 @@ def _enable_memory_mode(reason: str):
 
 def init_db():
     """Initialize storage. Use PostgreSQL if possible; otherwise fall back to memory."""
-    if not _PSYCOPG2_AVAILABLE:
-        _enable_memory_mode("psycopg2 not available")
+    if not _DB_DRIVER:
+        reason = _DB_DRIVER_ERR or "psycopg driver not available"
+        _enable_memory_mode(reason)
         return
     if not DB_URL:
         _enable_memory_mode("DATABASE_URL/PG* envs not set")
         return
+    con = None
+    cur = None
     try:
-        con = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)  # type: ignore
+        con = _connect()
         cur = con.cursor()
         cur.execute(
             """CREATE TABLE IF NOT EXISTS users (
@@ -74,10 +107,20 @@ def init_db():
             );"""
         )
         con.commit()
-        con.close()
         logger.info(" PostgreSQL ready")
     except Exception as e:
         _enable_memory_mode(f"PostgreSQL init failed: {e}")
+    finally:
+        if cur is not None:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
 
 def upsert_user(tg_id: int,
                 language: Optional[str] = None,
@@ -99,7 +142,9 @@ def upsert_user(tg_id: int,
         return
 
     try:
-        con = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)  # type: ignore
+        con = None
+        cur = None
+        con = _connect()
         cur = con.cursor()
         cur.execute(
             """INSERT INTO users (tg_id, language, first_name, last_name, phone)
@@ -112,25 +157,49 @@ def upsert_user(tg_id: int,
             (tg_id, language, first_name, last_name, phone),
         )
         con.commit()
-        con.close()
     except Exception as e:
         _enable_memory_mode(f"PostgreSQL upsert failed: {e}")
         # keep the data for this run
         upsert_user(tg_id, language, first_name, last_name, phone)
+    finally:
+        if cur is not None:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
 
 def get_user(tg_id: int) -> Optional[Tuple[int, int, Optional[str], Optional[str], Optional[str], Optional[str]]]:
     if _IN_MEMORY_MODE:
         row = _mem_users_by_tg.get(tg_id)
         if not row: return None
         return (row["id"], row["tg_id"], row.get("language"), row.get("first_name"), row.get("last_name"), row.get("phone"))
+    con = None
+    cur = None
+    row = None
     try:
-        con = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)  # type: ignore
+        con = _connect()
         cur = con.cursor()
         cur.execute("SELECT id, tg_id, language, first_name, last_name, phone FROM users WHERE tg_id=%s", (tg_id,))
         row = cur.fetchone()
-        con.close()
-        if not row: return None
-        return (row["id"], row["tg_id"], row["language"], row["first_name"], row["last_name"], row["phone"])
     except Exception as e:
         _enable_memory_mode(f"PostgreSQL read failed: {e}")
         return None
+    finally:
+        if cur is not None:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+    if not row:
+        return None
+    return (row["id"], row["tg_id"], row["language"], row["first_name"], row["last_name"], row["phone"])
